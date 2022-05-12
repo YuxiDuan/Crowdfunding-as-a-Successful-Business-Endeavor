@@ -1,0 +1,426 @@
+---
+title: "Determination of Kickstarter Campaign Success, and whether Crowdfunding would be a successful Endeavor."
+author: "Yuxi Duan"
+date: "12/2/2021"
+output: 
+  pdf_document:
+    extra_dependencies: "subfig"
+fontsize: 12pt
+geometry: margin=1in
+header-includes:
+   - \usepackage{setspace}\doublespacing
+   - \usepackage{float}
+fig_caption: yes
+indent: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message = FALSE, warning = FALSE, echo = TRUE)
+library(tidyverse)
+library(mosaic)
+library(ggthemes)
+library(gridExtra)
+library(car)
+library(performanceEstimation)
+library(InformationValue)
+library(pROC)
+library(e1071)
+library(rpart)
+library(dummies)
+library(class)
+library(rpart)
+library(rpart.plot)
+library(tree)
+library(randomForest)
+kick <- read_csv("kickstarter_projects_Feb19.csv", col_types = "ncfffccnncccnnfnnffn")
+
+#Recode values for status to 1/0.
+kick <- kick %>%
+  mutate(status = as.factor(if_else(status == "successful",1,0)))
+
+  
+```
+```{r}
+unique(kick$main_category)
+```
+```{r}
+unique(category)
+```
+
+\pagebreak
+
+## 1. Introduction
+
+Crowdfunding has been an area of interest in business. Typically, when launching a new product or service, the question of capital always comes up. Where will the money to launch the business come from? Shows like Shark Tank come to mind in which an average person places their dreams in front of successful investors in the hopes that one of them picks up their business, however, such opportunities are far from realistic and are not available readily. This is where crowdfunding comes in. In crowdfunding, the general public are the investors. No longer are small business owners trying to pander to the hungry sharks but instead they talk directly to the people. People become the investors and directly donate however much capital they are willing to part with into the project to bring the product or service to light. This approach seems more approachable as “the process of founding and launching a crowdfunding campaign is less time intensive than other options, as no legal applications or approval procedures are involved” [1]. While crowd funding does sound romantic in theory, there is much to consider developing a business through public interest. How does one go about creating a crowdfunding endeavor and what variables come into place when determining its success? Kickstarter is arguably the most prominent crowd funding platform to date. There are approximately 200,000+ successfully launched Kickstarter projects since February 2015, and the number continues to grow. Despite having a growing number of successful projects, there are a vast majority of projects that also fail. The current projection is that only 40% of all Kickstarter projects become successful. The risk of failure is incredibly high. In a study by Koch and Siering, they concluded that the factors that most contribute to success on the platform are funding goal and duration. Jascha Koch and Qian Cheng studied the role of qualitative success factors in the analysis of crowdfunding success. They surmised that qualitative factors are just as important as the quantitative ones. They found that the more polished the project, the greater the chances of success. “The inclusion of only quantitative factors as an approximation for underlying qualitative attributes was a good approach,” in determining success of the crowd funding campaign [2]. 
+
+_1.1 Research Question_
+
+The current study builds prediction models using Logistic Regression, KNN and Decision Tree to predict the success of a Kickstarter campaign.
+
+_1.2 Data_
+
+For this study, the data set was obtained from Kaggle [3]. Variables of the data set include Project name, duration, monetary goal, amount pledged, and duration. Categorical variables include Kickstarter category and sub-category. The data set contains total 192548 records with the following 20 variables (Outcome variable - _status_):
+
+* **Categorical variables**
+  + *id:* Unique identification number (primary key).
+  + *name:* Name of the project.
+  + *currency:* USD, GBP, EUR etc.
+  + *main_category:* games, comics, fashion etc. This is one of the predictors used in the models.
+  + *sub_category*
+  + *city* 
+  + *state* 
+  + *country*
+  + *status:* 1 = success, 0 = failure. This is our outcome variable.
+  + *start_month* 
+  + *end_month* 
+  + *start_Q:* Quarter for the start of the campaign.
+  + *end_Q:* Quarter when the campaign ended. 
+* **Quantitative variables**
+  + *launched_at:* Date of launch of campaign to raise a certain amount of money.
+  + *deadline:* Deadline for the campaign.
+  + *duration:* The duration in days for the campaign to raise money through crowdfunding. This is a predictor used in the models. 
+  + *goal_usd:* The total amount of money required to be raised. This is another predictor.
+  + *blurb_length*
+  + *name_length:* This is a predictor.
+  + *usd_pledged*
+
+\singlespacing
+```{r}
+category <- model.matrix(~main_category-1, data=kick)
+kick$games <- category[,1]
+kick$comics <- category[,"main_categorycomics"]
+kick$fashion <- category[,3]
+kick$music <- category[,"main_categorymusic"]
+kick$technology <- category[,5]
+kick$film <- category[,"main_categoryfilm & video"]
+kick$design <- category[,7]
+kick$art <- category[,"main_categoryart"]
+kick$journalism <- category[,9]
+kick$crafts <- category[,"main_categorycrafts"]
+kick$publishing <- category[,11]
+kick$photography <- category[,"main_categoryphotography"]
+kick$theater <- category[,13]
+kick$food <- category[,"main_categoryfood"]
+kick$dance <- category[,15]
+
+```
+
+## 2. Exploratory Data Analysis
+
+There are no missing values in the data set. For the continuous variables, the box plots show their distributions. The variable goal_usd is highly right skewed, so, a log transformation is necessitated. Other variables look fine.
+
+```{r eda, out.height="35%", fig.align='center'}
+#Select the variables of interest
+kick <- kick %>%
+  select(id, duration, goal_usd, name_length, status, games, comics, fashion, music, technology, film, design, art, journalism,crafts,publishing,theater,food,dance)
+
+#GEt quick summary of the dataset
+kick %>%
+  summary()
+
+#Boxplot/histogram for continuous variables
+kick %>%
+  select(duration, name_length) %>%
+  as.data.frame() %>%
+  stack() %>%
+  ggplot() + 
+  geom_boxplot(aes(y = ind, x = values)) + theme_bw()
+
+kick %>%
+  ggplot() + geom_boxplot(aes((goal_usd))) +
+  geom_boxplot(aes((duration))) +
+  theme_bw()
+
+kick %>%
+  ggplot() + geom_boxplot(aes(log(goal_usd))) +
+  theme_bw()
+```
+
+## 3. Binomial Logistic Regression Model
+
+### Assumptions
+
+1. Binary logistic regression requires the dependent variable to be binary.
+2. The observations are independent of each other.
+3. There is no severe multicollinearity among the explanatory variables.
+4. There are no extreme outliers.
+5. The independent variables are linearly related to the log odds.
+6. The sample size of the dataset is large enough to draw valid conclusions from the fitted logistic regression model.
+
+Out of the above 6 assumptions, the 3rd assumption about multicollinearity will be tested using variance inflation factor (VIF). We will remove the outliers from our data to take care of the 4th assumption. There is no evidence to suggest that the remaining 4 assumptions are violated.
+
+### Dealing with Outliers
+
+There seems to be many outliers/extreme values. For the sake of this analysis, we will remove these extreme values/potential outliers and focus on the more numerous values in the middle section of the distribution. After removing the extreme values, we are still left with over 130k observations. Finally, we draw a random sample of 10000 records do do our analysis.
+
+```{r}
+#Remove outliers/extreme values
+kick %>%
+  filter(12>log(goal_usd), 4<log(goal_usd)) %>%
+  filter(20<duration, 40>duration) %>%
+  filter(name_length<15) ->
+  kick
+
+set.seed(12345)
+sample_10k <- sample(nrow(kick), 10000, replace = FALSE)
+kick <- kick[sample_10k, ]
+```
+
+### Splitting the Data
+
+We partition our data into training and test data sets using 75% to 25% split.
+
+```{r}
+set.seed(12345)
+sample_set <- sample(nrow(kick), round(nrow(kick)*.75), replace = FALSE)
+kick_train <- kick[sample_set, ]
+kick_test <- kick[-sample_set, ]
+```
+
+### Dealing with Class Imbalance
+
+We see that the class distributions across the three sets are similar. The test data should mirror the class distribution of the original data because a model's performance against the test data is a proxy for its generalizability against unseen data. However, any imbalance in the training data is balanced prior to the modeling process. 
+
+```{r}
+#Splitting the data
+round(prop.table(table(select(kick, status))),4)*100
+round(prop.table(table(select(kick_train, status))),4)*100
+round(prop.table(table(select(kick_test, status))),4)*100
+
+#Balance the training data
+set.seed(12345)
+kick_train <- smote(status ~ ., data.frame(kick_train), perc.over = 1, perc.under = 2)
+round(prop.table(table(select(kick_train, status))),4)*100
+```
+
+### Training and Evaluating the Model
+
+We see that based on the p-values, all of the features in this full model are significant.
+
+```{r}
+kick_model <- glm(kick_train, family = binomial, formula = status ~ . - id)
+summary(kick_model)
+```
+
+### Dealing with Multicollinearity
+
+Multicollinearity is a problem because it makes it difficult to separate out the impact of individual predictors on response. A VIF of greater than 5 indicates the presence of multicollinearity and requires remediation. Our results show that none of the features have a VIF larger than 5.
+
+```{r}
+vif(kick_model)
+```
+
+### Choosing a Cutoff Value
+
+```{r}
+kick_predl <- predict(kick_model, kick_test, type = "response")
+
+#Choosing a Cutoff Value
+ideal_cutoff <- optimalCutoff(
+  actuals = kick_test$status,
+  predictedScores = kick_predl,
+  optimiseFor = "Both")
+ideal_cutoff
+```
+
+### Prediction Accuracy
+
+Using the recommended cutoff value of `r round(ideal_cutoff, 2)`, we transform our predictions and calculate our model predictive accuracy. Results show that logistic regression model's predictive accuracy is 62.6%.
+
+```{r}
+kick_predl <- if_else(kick_predl >= ideal_cutoff, 1, 0)
+kick_predl_table <- table(kick_test$status, kick_predl)
+kick_predl_table
+
+sum(diag(kick_predl_table))/nrow(kick_test)
+```
+
+## 4. K-Nearest Neighbors
+
+### Normalizing the Data
+
+Features with larger values or that have a wider range of values tend to disproportionately impact Euclidean distances. Hence, it is vital to normalize the feature values prior to KNN. We will use the min-max normalization approach for which we will write a normalize function. Then we apply the normalization function to each of the numerical features to normalize their values between 0 and 1.
+
+```{r}
+normalize <- function(x) {
+  return((x - min(x))/(max(x)-min(x)))
+}
+
+kick.normal <- kick %>%
+  mutate(duration = normalize(duration)) %>%
+  mutate(goal_usd = normalize(goal_usd)) %>%
+  mutate(name_length = normalize(name_length))
+```
+
+### Dealing with Categorical Variables
+
+A common approach to deal with categorical variables is to code them as dummy variables. Conveniently, the values for these new features also fall within the same scale (0 and 1) as the normalized features earlier. 
+
+Our new feature names list shows that we now have 19 features, 15 of which are our newly created dummy variables. One of the features - id is the primary key and not a predictor. 
+
+```{r}
+kick.normal <- data.frame(kick.normal)
+
+#Split off the class labels
+kick.normal.labels <- kick.normal %>%
+  select(status)
+kick.normal <- kick.normal %>%
+  select(-status)
+
+#Create dummy variables
+kick.normal <- dummy.data.frame(data = kick.normal, sep = "_")
+colnames(kick.normal)
+```
+
+### Splitting the Data
+
+```{r}
+kick.normal_train <- kick.normal[sample_set, ]
+kick.normal_test <- kick.normal[-sample_set, ]
+
+#split the class labels
+kick.normal.labels_train <- kick.normal.labels[sample_set, ]
+kick.normal.labels_test <- kick.normal.labels[-sample_set, ]
+```
+
+### Classifying Unlabeled Data
+
+Initial k = square root of number of training observations
+
+```{r}
+kick.normal_predl <- knn(train = kick.normal_train,
+                         test = kick.normal_test,
+                         cl = kick.normal.labels_train,
+                         k = 87)
+```
+
+### Evaluating the Model
+
+Results show that KNN model's predictive accuracy is 63.4%.
+
+```{r}
+#Evaluating the model
+kick.normal_predl_table <- table(kick.normal.labels_test, kick.normal_predl)
+kick.normal_predl_table
+
+sum(diag(kick.normal_predl_table))/nrow(kick.normal_test)
+```
+
+### Improving the Model
+
+Let us try the value of k = 1 to see whether it has a meaningful impact on our predictive accuracy. The result shows that setting k = 1 has a negative impact on the prediction accuracy as it goes down to 53% from the earlier 63%.
+
+```{r}
+kick.normal_predl <- knn(train = kick.normal_train,
+                         test = kick.normal_test,
+                         cl = kick.normal.labels_train,
+                         k = 1)
+#Evaluating the model
+kick.normal_predl_table <- table(kick.normal.labels_test, kick.normal_predl)
+kick.normal_predl_table
+sum(diag(kick.normal_predl_table))/nrow(kick.normal_test)
+```
+
+```{r}
+# We might want to try a range of values for k to find which gives the most accurate classifications
+# A for loop is useful for this, where in each iteration, it checks to see if the current error rate beats the best error rate observed so far
+# (Here we are minimizing error rate, which is 1 minus classification accuracy.  A similar loop could be created to maximize classification accuracy.)
+# Note that we've called the index variable i rather than k, since the knn function has a parameter called k.
+best.k <- -1
+error.rate <- -1
+best.error.rate <- 99999999
+for (i in 1:100) {
+  kick.knn <- knn(kick.normal_train, kick.normal_test, kick.normal.labels_train, k=i)
+  error.rate <- 1-(sum(kick.knn == kick.normal.labels_test) / length(kick.normal.labels_test))
+  if (error.rate < best.error.rate) {
+    best.k <- i
+    best.error.rate <- error.rate
+  }
+}
+print(paste("The optimal value of k is",best.k,"with an overall error rate of",best.error.rate))
+```
+
+
+
+Let us try the value of k = 50. It gives more or less the same accuracy as with k = 87.
+
+```{r}
+kick.normal_predl <- knn(train = kick.normal_train,
+                         test = kick.normal_test,
+                         cl = kick.normal.labels_train,
+                         k = 66)
+#Evaluating the model
+kick.normal_predl_table <- table(kick.normal.labels_test, kick.normal_predl)
+kick.normal_predl_table
+sum(diag(kick.normal_predl_table))/nrow(kick.normal_test)
+```
+
+```{r}
+
+```
+
+## 5. Decision Tree
+
+### Training the Model
+
+```{r}
+kick_model3 <- rpart(status ~ . - id, method = "class", data = kick_train)
+rpart.plot(kick_model3)
+```
+```{r}
+rf = randomForest(status ~. -id, data = kick)
+rf
+```
+
+### Evaluating the Model
+
+We create a confusion matrix based on our predictions and calculate the prediction accuracy of our model, which comes out to be almost 63%.
+
+```{r}
+kick_pred3 <- predict(kick_model3, kick_test, type = "class")
+kick_pred3_table <- table(kick_test$status, kick_pred3)
+kick_pred3_table
+
+sum(diag(kick_pred3_table))/nrow(kick_test)
+```
+
+## 6. ROC curves for the prediction models
+
+ROC curve is commonly used to visually represent the relationship between a model's true positive rate and false positive rate for all possible cutoff values. ROC curve is summarized into a single quantity known as area under the curve (AUC), which measures the entire two-dimensional area underneath the ROC curve from (0,0) to (1,1). The higher the AUC, the better the performance of the model at distinguishing between the positive and negative classes. 
+
+```{r roc, warning=F, message=F, out.height="40%", fig.align='center'}
+knn_predl <- kick.normal_predl %>%
+  as.vector() %>%
+  as.numeric()
+
+kick_pred3 <- kick_pred3 %>%
+  as.vector() %>%
+  as.numeric()
+
+par(pty="s") 
+ROC1 <- roc(kick_test$status ~ kick_predl, plot=TRUE, print.auc=TRUE, 
+               col="green", lwd =2, print.auc.y=0.6, print.auc.x=0.3, legacy.axes=TRUE,
+               main="ROC Curves for prediction models")
+
+ROC2 <- roc(kick.normal.labels_test ~ knn_predl, plot=TRUE, print.auc=TRUE,
+               col="blue", lwd = 2, print.auc.y=0.5, print.auc.x=0.3, legacy.axes=TRUE, add = TRUE)
+
+ROC3 <- roc(kick_test$status ~ kick_pred3, plot=TRUE, print.auc=TRUE, 
+               col="red", lwd =2, print.auc.y=0.4, print.auc.x=0.3, legacy.axes=TRUE,
+               add = TRUE)
+
+legend("bottomright", legend=c("Logit Reg.","KNN", "Dec. Tree"),
+       col=c("green","blue", "red"), lwd=2)
+```
+
+\doublespacing
+\pagebreak
+## 5. Conclusion
+
+The capability to predict diabetes early assumes a vital role for the patient's appropriate treatment procedure. Machine learning methods are valuable in this early diagnosis of diabetes. In the current study, two machine learning techniques were applied on a training data set and validated against a test data set; both of these data sets were based on the data collected from the patients of Sylhet Diabetes Hospital in Sylhet, Bangladesh. The results of our model implementations show that based on both the measures of future performance - prediction accuracy and the AUC, the logistic regression classifier outperforms the naive Bayes classifier. One limitation of the current study is that it may only be valid on a similar data set as was used for this study, which was sourced from a very specific location. Further research is needed to check if similar results are seen for data collected elsewhere. 
+
+## 6. References
+\footnotesize
+1. Brown, Terrence E., et al. “Seeking Funding in Order to Sell: Crowdfunding as a Marketing Tool.” Business Horizons, vol. 60, no. 2, Mar. 2017, pp. 189–195, 10.1016/j.bushor.2016.11.004. [Accessed 26 Oct. 2021]
+2. Koch, Jascha-Alexander, and Qian Cheng. THE ROLE of QUALITATIVE SUCCESS FACTORS in the ANALYSIS of CROWDFUNDING SUCCESS: EVIDENCE from KICKSTARTER. 2016.
+3. https://www.kaggle.com/yashkantharia/kickstarter-campaigns?select=Kickstarter_projects_Feb19.csv
